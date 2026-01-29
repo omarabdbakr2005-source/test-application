@@ -7,7 +7,7 @@ import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { encode, decode, decodeAudioData } from './utils/audio';
 
 // Safe access to Telegram WebApp SDK
-const tg = (window as any).Telegram?.WebApp;
+const tg = typeof window !== 'undefined' ? (window as any).Telegram?.WebApp : null;
 
 const Header = () => (
   <header className="py-4 px-6 flex justify-between items-center border-b border-white/10 glass sticky top-0 z-50 safe-pt">
@@ -50,9 +50,13 @@ const App: React.FC = () => {
     if (tg) {
       tg.ready();
       tg.expand();
-      tg.enableClosingConfirmation();
-      tg.setHeaderColor(tg.themeParams?.header_bg_color || '#1e1b4b');
-      tg.setBackgroundColor(tg.themeParams?.bg_color || '#020617');
+      try {
+        tg.enableClosingConfirmation?.();
+        tg.setHeaderColor?.(tg.themeParams?.header_bg_color || '#1e1b4b');
+        tg.setBackgroundColor?.(tg.themeParams?.bg_color || '#020617');
+      } catch (e) {
+        console.warn("Telegram SDK methods failed", e);
+      }
     }
   }, []);
 
@@ -170,7 +174,7 @@ const App: React.FC = () => {
       console.error("Game Start Error:", e);
       setIsLoading(false);
       setLoadingMessage('');
-      tg?.showAlert(e.message || "Failed to start game. Check your API key or connection.");
+      tg?.showAlert?.(e.message || "Failed to start game. Check your API key or connection.");
     }
   }, [selectedCategory, gameState.personality, isLoading]);
 
@@ -204,7 +208,7 @@ const App: React.FC = () => {
   const shareResult = () => {
     tg?.HapticFeedback?.impactOccurred('medium');
     const text = `I just scored ${gameState.score}/${gameState.questions.length} on Gemini Trivia! Can you beat my score? 🏆`;
-    tg?.switchInlineQuery(text);
+    tg?.switchInlineQuery?.(text);
   };
 
   // Synchronize Telegram Main Button
@@ -244,7 +248,7 @@ const App: React.FC = () => {
         {gameState.status === 'setup' && (
           <div className="w-full space-y-6 py-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="text-center space-y-1">
-              <h2 className="text-2xl font-bungee">Trivia Host</h2>
+              <h2 className="text-2xl font-bungee text-white">Trivia Host</h2>
               <p className="text-xs text-indigo-200 opacity-60 uppercase tracking-widest">Select a personality</p>
             </div>
             
@@ -261,8 +265,8 @@ const App: React.FC = () => {
                     }`}
                   >
                     <div className="text-3xl mb-2">{p.icon}</div>
-                    <h3 className="text-base font-bold mb-1">{p.type}</h3>
-                    <p className="text-[11px] opacity-70 leading-tight">{p.description}</p>
+                    <h3 className="text-base font-bold mb-1 text-white">{p.type}</h3>
+                    <p className="text-[11px] text-white/70 leading-tight">{p.description}</p>
                   </button>
                 );
               })}
@@ -288,7 +292,7 @@ const App: React.FC = () => {
                 <button 
                   onClick={startGame} 
                   disabled={isLoading} 
-                  className={`w-full py-4 bg-indigo-600 rounded-2xl font-bungee text-lg shadow-lg shadow-indigo-500/40 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-3 overflow-hidden relative`}
+                  className={`w-full py-4 bg-indigo-600 rounded-2xl font-bungee text-lg text-white shadow-lg shadow-indigo-500/40 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-3 overflow-hidden relative`}
                 >
                   {isLoading ? (
                     <>
@@ -313,7 +317,7 @@ const App: React.FC = () => {
               </div>
               <div className="text-center px-4">
                 <div className="text-[9px] font-bold text-indigo-400 uppercase tracking-widest mb-1 opacity-60">Question {gameState.currentQuestionIndex + 1}/{gameState.questions.length}</div>
-                <h3 className="text-xl font-bold leading-tight">{currentQ.text}</h3>
+                <h3 className="text-xl font-bold leading-tight text-white">{currentQ.text}</h3>
               </div>
             </div>
             
@@ -326,7 +330,7 @@ const App: React.FC = () => {
                   className={`p-4 border rounded-xl text-left text-sm font-semibold transition-all relative overflow-hidden active:scale-[0.99] ${gameState.isShowingFeedback ? (option === currentQ.correctAnswer ? 'bg-emerald-500/20 border-emerald-500' : 'bg-white/5 border-white/10 opacity-40') : 'bg-white/5 border-white/10'}`}
                 >
                   <span className={`absolute left-0 top-0 bottom-0 w-1 ${gameState.isShowingFeedback && option === currentQ.correctAnswer ? 'bg-emerald-500' : 'bg-indigo-500'}`}></span>
-                  {option}
+                  <span className="text-white">{option}</span>
                 </button>
               ))}
             </div>
@@ -337,7 +341,7 @@ const App: React.FC = () => {
                 <p className="text-[11px] text-indigo-100 italic opacity-90 leading-relaxed">{currentQ.explanation}</p>
                 <button 
                   onClick={handleNextQuestion}
-                  className="w-full mt-2 py-3 bg-white/10 rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-white/20 transition-all"
+                  className="w-full mt-2 py-3 bg-white/10 rounded-xl text-[10px] text-white font-bold uppercase tracking-widest hover:bg-white/20 transition-all"
                 >
                   {gameState.currentQuestionIndex < gameState.questions.length - 1 ? 'Next Question' : 'Finish Game'}
                 </button>
@@ -356,7 +360,7 @@ const App: React.FC = () => {
             <div className="glass p-4 rounded-2xl flex items-center justify-between mt-2">
               <div className="flex flex-col"><span className="text-[8px] font-bold text-white/30 uppercase">Score</span><span className="text-xl font-bungee text-indigo-400">{gameState.score}</span></div>
               <div className="flex gap-2">
-                <button onClick={() => { tg?.HapticFeedback?.selectionChanged(); setIsLiveMode(!isLiveMode); if(isLiveMode) stopLiveSession(); }} className={`px-3 py-2 rounded-lg text-[9px] font-bold border transition-all ${isLiveMode ? 'bg-indigo-600 border-indigo-400' : 'bg-white/5 border-white/10'}`}>
+                <button onClick={() => { tg?.HapticFeedback?.selectionChanged(); setIsLiveMode(!isLiveMode); if(isLiveMode) stopLiveSession(); }} className={`px-3 py-2 rounded-lg text-[9px] font-bold border transition-all text-white ${isLiveMode ? 'bg-indigo-600 border-indigo-400' : 'bg-white/5 border-white/10'}`}>
                   VOICE {isLiveMode ? 'ON' : 'OFF'}
                 </button>
                 {isLiveMode && (
@@ -365,7 +369,7 @@ const App: React.FC = () => {
                     onMouseUp={stopLiveSession} 
                     onTouchStart={(e) => { e.preventDefault(); startLiveSession(); }} 
                     onTouchEnd={(e) => { e.preventDefault(); stopLiveSession(); }} 
-                    className={`px-4 py-2 rounded-lg text-[9px] font-bold shadow-lg transition-colors ${isRecording ? 'bg-red-600' : 'bg-green-600'}`}
+                    className={`px-4 py-2 rounded-lg text-[9px] text-white font-bold shadow-lg transition-colors ${isRecording ? 'bg-red-600' : 'bg-green-600'}`}
                   >
                     {isRecording ? "TALKING..." : "HOLD TO TALK"}
                   </button>
@@ -378,7 +382,7 @@ const App: React.FC = () => {
         {gameState.status === 'ended' && (
           <div className="text-center space-y-6 py-10 w-full animate-in zoom-in duration-500">
             <div className="text-6xl">🏆</div>
-            <h2 className="text-3xl font-bungee">Final Results</h2>
+            <h2 className="text-3xl font-bungee text-white">Final Results</h2>
             <div className="glass p-8 rounded-3xl w-full max-w-xs mx-auto">
               <div className="text-5xl font-bungee text-indigo-400">{gameState.score}<span className="text-xl text-white/20 ml-1">/{gameState.questions.length}</span></div>
             </div>
