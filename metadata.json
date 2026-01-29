@@ -1,0 +1,7 @@
+{
+  "name": "Copy of Gemini Trivia Mini App",
+  "description": "High-stakes trivia featuring dynamic AI personalities powered by Gemini Live and Google Search grounding. Perfect for Telegram Mini App gameplay.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
