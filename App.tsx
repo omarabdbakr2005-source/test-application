@@ -23,34 +23,6 @@ const Header = () => (
   </header>
 );
 
-interface PersonalityCardProps {
-  type: PersonalityType;
-  isSelected: boolean;
-  onClick: () => void;
-}
-
-const PersonalityCard: React.FC<PersonalityCardProps> = ({ 
-  type, 
-  isSelected, 
-  onClick 
-}) => {
-  const p = PERSONALITIES[type];
-  return (
-    <button 
-      onClick={onClick}
-      className={`p-4 rounded-2xl transition-all duration-300 text-left border-2 ${
-        isSelected 
-          ? `bg-gradient-to-br ${p.color} border-white shadow-xl scale-[1.02]` 
-          : 'bg-white/5 border-white/10'
-      }`}
-    >
-      <div className="text-3xl mb-2">{p.icon}</div>
-      <h3 className="text-base font-bold mb-1">{p.type}</h3>
-      <p className="text-[11px] opacity-70 leading-tight">{p.description}</p>
-    </button>
-  );
-};
-
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>({
     status: 'setup',
@@ -64,6 +36,7 @@ const App: React.FC = () => {
 
   const [selectedCategory, setSelectedCategory] = useState(CATEGORIES[0]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
   const [isLiveMode, setIsLiveMode] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   
@@ -73,7 +46,6 @@ const App: React.FC = () => {
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartTimeRef = useRef(0);
 
-  // Sync with Telegram Theme and UI
   useEffect(() => {
     if (tg) {
       tg.ready();
@@ -84,11 +56,27 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Resume AudioContext (mandatory for mobile/Telegram interaction)
   const resumeAudio = async () => {
-    if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
-    if (outputAudioContextRef.current?.state === 'suspended') await outputAudioContextRef.current.resume();
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+    }
+    if (!outputAudioContextRef.current) {
+      outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    }
+    if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
+    if (outputAudioContextRef.current.state === 'suspended') await outputAudioContextRef.current.resume();
   };
+
+  const stopLiveSession = useCallback(() => {
+    if (sessionRef.current) {
+      try { sessionRef.current.close(); } catch(e) {}
+      sessionRef.current = null;
+    }
+    setIsRecording(false);
+    sourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
+    sourcesRef.current.clear();
+    nextStartTimeRef.current = 0;
+  }, []);
 
   const startLiveSession = async () => {
     await resumeAudio();
@@ -98,9 +86,6 @@ const App: React.FC = () => {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         callbacks: {
@@ -152,24 +137,20 @@ const App: React.FC = () => {
     }
   };
 
-  const stopLiveSession = useCallback(() => {
-    if (sessionRef.current) {
-      sessionRef.current.close();
-      sessionRef.current = null;
-    }
-    setIsRecording(false);
-    sourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
-    sourcesRef.current.clear();
-    nextStartTimeRef.current = 0;
-  }, []);
-
   const startGame = useCallback(async () => {
     if (isLoading) return;
+    setIsLoading(true);
+    setLoadingMessage('Consulting the Host...');
+    
     await resumeAudio();
     tg?.HapticFeedback?.notificationOccurred('success');
-    setIsLoading(true);
+    
     try {
+      setLoadingMessage('Researching questions...');
       const questions = await generateTriviaQuestions(selectedCategory);
+      
+      if (!questions || questions.length === 0) throw new Error("No questions generated");
+
       setGameState(prev => ({
         ...prev,
         status: 'playing',
@@ -179,10 +160,17 @@ const App: React.FC = () => {
         isShowingFeedback: false,
         lastAnswerCorrect: undefined
       }));
+      
       setIsLoading(false);
-      playTTS(`Welcome! I am your host. Let's start with ${selectedCategory}!`, gameState.personality);
-    } catch (e) {
+      setLoadingMessage('');
+      
+      const host = PERSONALITIES[gameState.personality];
+      playTTS(`Welcome to Gemini Trivia! I'm your host, ${host.type}. Our topic today: ${selectedCategory}. Let's get started!`, gameState.personality);
+    } catch (e: any) {
+      console.error("Game Start Error:", e);
       setIsLoading(false);
+      setLoadingMessage('');
+      tg?.showAlert(e.message || "Failed to start game. Check your API key or connection.");
     }
   }, [selectedCategory, gameState.personality, isLoading]);
 
@@ -209,7 +197,7 @@ const App: React.FC = () => {
       setGameState(prev => ({ ...prev, currentQuestionIndex: prev.currentQuestionIndex + 1, isShowingFeedback: false }));
     } else {
       setGameState(prev => ({ ...prev, status: 'ended' }));
-      playTTS(`Final score: ${gameState.score} out of ${gameState.questions.length}.`, gameState.personality);
+      playTTS(`That's the game! You scored ${gameState.score} out of ${gameState.questions.length}.`, gameState.personality);
     }
   }, [gameState.currentQuestionIndex, gameState.questions.length, gameState.score, gameState.personality]);
 
@@ -219,21 +207,32 @@ const App: React.FC = () => {
     tg?.switchInlineQuery(text);
   };
 
-  // Sync Telegram Main Button
+  // Synchronize Telegram Main Button
   useEffect(() => {
     if (!tg) return;
     const btn = tg.MainButton;
-    if (gameState.status === 'setup' && !isLoading) {
+    
+    const cleanup = () => {
+      btn.offClick(startGame);
+      btn.offClick(handleNextQuestion);
+    };
+
+    if (isLoading) {
+      btn.setText('LOADING...').show().disable();
+      return cleanup;
+    } else {
+      btn.enable();
+    }
+
+    if (gameState.status === 'setup') {
       btn.setText('START GAME').show().onClick(startGame);
     } else if (gameState.status === 'playing' && gameState.isShowingFeedback) {
       btn.setText(gameState.currentQuestionIndex < gameState.questions.length - 1 ? 'NEXT QUESTION' : 'SEE RESULTS').show().onClick(handleNextQuestion);
     } else {
       btn.hide();
     }
-    return () => {
-      btn.offClick(startGame);
-      btn.offClick(handleNextQuestion);
-    };
+
+    return cleanup;
   }, [gameState.status, gameState.isShowingFeedback, gameState.currentQuestionIndex, gameState.questions.length, startGame, handleNextQuestion, isLoading]);
 
   const currentQ = gameState.questions[gameState.currentQuestionIndex];
@@ -245,22 +244,62 @@ const App: React.FC = () => {
         {gameState.status === 'setup' && (
           <div className="w-full space-y-6 py-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="text-center space-y-1">
-              <h2 className="text-2xl font-bungee">Host Selection</h2>
-              <p className="text-xs text-indigo-200 opacity-60 uppercase tracking-widest">Choose your opponent</p>
+              <h2 className="text-2xl font-bungee">Trivia Host</h2>
+              <p className="text-xs text-indigo-200 opacity-60 uppercase tracking-widest">Select a personality</p>
             </div>
+            
             <div className="grid grid-cols-2 gap-3">
-              {(Object.keys(PERSONALITIES) as PersonalityType[]).map(type => (
-                <PersonalityCard key={type} type={type} isSelected={gameState.personality === type} onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setGameState(prev => ({ ...prev, personality: type })); }} />
-              ))}
+              {(Object.keys(PERSONALITIES) as PersonalityType[]).map(type => {
+                const p = PERSONALITIES[type];
+                const isSelected = gameState.personality === type;
+                return (
+                  <button 
+                    key={type}
+                    onClick={() => { tg?.HapticFeedback?.impactOccurred('light'); setGameState(prev => ({ ...prev, personality: type })); }}
+                    className={`p-4 rounded-2xl transition-all duration-300 text-left border-2 ${
+                      isSelected ? `bg-gradient-to-br ${p.color} border-white shadow-xl scale-[1.02]` : 'bg-white/5 border-white/10'
+                    }`}
+                  >
+                    <div className="text-3xl mb-2">{p.icon}</div>
+                    <h3 className="text-base font-bold mb-1">{p.type}</h3>
+                    <p className="text-[11px] opacity-70 leading-tight">{p.description}</p>
+                  </button>
+                );
+              })}
             </div>
+
             <div className="space-y-4 glass p-5 rounded-3xl">
               <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-indigo-300 opacity-60">Category</label>
+                <label className="text-[10px] font-bold uppercase tracking-widest text-indigo-300 opacity-60">Topic</label>
                 <div className="flex flex-wrap gap-2">
                   {CATEGORIES.map(cat => (
-                    <button key={cat} onClick={() => { tg?.HapticFeedback?.selectionChanged(); setSelectedCategory(cat); }} className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all border ${selectedCategory === cat ? 'bg-indigo-600 border-indigo-400 text-white' : 'bg-white/5 border-white/10 text-white/60'}`}>{cat}</button>
+                    <button 
+                      key={cat} 
+                      onClick={() => { tg?.HapticFeedback?.selectionChanged(); setSelectedCategory(cat); }} 
+                      className={`px-3 py-1.5 rounded-full text-[10px] font-bold transition-all border ${selectedCategory === cat ? 'bg-indigo-600 border-indigo-400 text-white' : 'bg-white/5 border-white/10 text-white/60'}`}
+                    >
+                      {cat}
+                    </button>
                   ))}
                 </div>
+              </div>
+              
+              <div className="pt-4">
+                <button 
+                  onClick={startGame} 
+                  disabled={isLoading} 
+                  className={`w-full py-4 bg-indigo-600 rounded-2xl font-bungee text-lg shadow-lg shadow-indigo-500/40 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-3 overflow-hidden relative`}
+                >
+                  {isLoading ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                      <span className="text-sm">{loadingMessage || 'PREPARING...'}</span>
+                    </>
+                  ) : (
+                    'START GAME'
+                  )}
+                </button>
+                <p className="text-[9px] text-center mt-3 text-white/30 uppercase tracking-widest font-bold">Press to generate AI trivia</p>
               </div>
             </div>
           </div>
@@ -269,36 +308,68 @@ const App: React.FC = () => {
         {gameState.status === 'playing' && currentQ && (
           <div className="w-full grid grid-cols-1 gap-5 animate-in zoom-in duration-300">
             <div className="flex flex-col items-center gap-3">
-              <div className={`w-20 h-20 rounded-full bg-gradient-to-br ${PERSONALITIES[gameState.personality].color} flex items-center justify-center text-4xl shadow-2xl ring-4 ring-white/10 ${isRecording ? 'pulse' : ''}`}>{PERSONALITIES[gameState.personality].icon}</div>
+              <div className={`w-20 h-20 rounded-full bg-gradient-to-br ${PERSONALITIES[gameState.personality].color} flex items-center justify-center text-4xl shadow-2xl ring-4 ring-white/10 ${isRecording ? 'pulse' : ''}`}>
+                {PERSONALITIES[gameState.personality].icon}
+              </div>
               <div className="text-center px-4">
                 <div className="text-[9px] font-bold text-indigo-400 uppercase tracking-widest mb-1 opacity-60">Question {gameState.currentQuestionIndex + 1}/{gameState.questions.length}</div>
                 <h3 className="text-xl font-bold leading-tight">{currentQ.text}</h3>
               </div>
             </div>
+            
             <div className="grid grid-cols-1 gap-2.5">
               {currentQ.options.map((option, idx) => (
-                <button key={idx} onClick={() => handleAnswer(option)} disabled={gameState.isShowingFeedback} className={`p-4 border rounded-xl text-left text-sm font-semibold transition-all relative overflow-hidden active:scale-[0.99] ${gameState.isShowingFeedback ? option === currentQ.correctAnswer ? 'bg-emerald-500/20 border-emerald-500' : 'bg-white/5 border-white/10 opacity-40' : 'bg-white/5 border-white/10'}`}><span className={`absolute left-0 top-0 bottom-0 w-1 ${gameState.isShowingFeedback && option === currentQ.correctAnswer ? 'bg-emerald-500' : 'bg-indigo-500'}`}></span>{option}</button>
+                <button 
+                  key={idx} 
+                  onClick={() => handleAnswer(option)} 
+                  disabled={gameState.isShowingFeedback} 
+                  className={`p-4 border rounded-xl text-left text-sm font-semibold transition-all relative overflow-hidden active:scale-[0.99] ${gameState.isShowingFeedback ? (option === currentQ.correctAnswer ? 'bg-emerald-500/20 border-emerald-500' : 'bg-white/5 border-white/10 opacity-40') : 'bg-white/5 border-white/10'}`}
+                >
+                  <span className={`absolute left-0 top-0 bottom-0 w-1 ${gameState.isShowingFeedback && option === currentQ.correctAnswer ? 'bg-emerald-500' : 'bg-indigo-500'}`}></span>
+                  {option}
+                </button>
               ))}
             </div>
+
             {gameState.isShowingFeedback && (
               <div className={`p-5 rounded-2xl border glass space-y-2 animate-in fade-in duration-300 ${gameState.lastAnswerCorrect ? 'border-emerald-500/30' : 'border-rose-500/30'}`}>
-                <h4 className={`text-xs font-bold uppercase tracking-widest ${gameState.lastAnswerCorrect ? 'text-emerald-400' : 'text-rose-400'}`}>{gameState.lastAnswerCorrect ? 'Spot On!' : 'Incorrect!'}</h4>
+                <h4 className={`text-xs font-bold uppercase tracking-widest ${gameState.lastAnswerCorrect ? 'text-emerald-400' : 'text-rose-400'}`}>{gameState.lastAnswerCorrect ? 'Correct!' : 'Incorrect!'}</h4>
                 <p className="text-[11px] text-indigo-100 italic opacity-90 leading-relaxed">{currentQ.explanation}</p>
+                <button 
+                  onClick={handleNextQuestion}
+                  className="w-full mt-2 py-3 bg-white/10 rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-white/20 transition-all"
+                >
+                  {gameState.currentQuestionIndex < gameState.questions.length - 1 ? 'Next Question' : 'Finish Game'}
+                </button>
               </div>
             )}
+
             {currentQ.sources && currentQ.sources.length > 0 && (
               <div className="glass p-3 rounded-xl space-y-2">
-                <span className="text-[8px] font-bold text-white/40 uppercase block">Verified Sources:</span>
+                <span className="text-[8px] font-bold text-white/40 uppercase block">Grounding Sources:</span>
                 <div className="flex flex-wrap gap-2">
                   {currentQ.sources.map((s, i) => <a key={i} href={s} target="_blank" rel="noopener noreferrer" className="text-[10px] text-indigo-400">🔗 {new URL(s).hostname.replace('www.', '')}</a>)}
                 </div>
               </div>
             )}
+
             <div className="glass p-4 rounded-2xl flex items-center justify-between mt-2">
               <div className="flex flex-col"><span className="text-[8px] font-bold text-white/30 uppercase">Score</span><span className="text-xl font-bungee text-indigo-400">{gameState.score}</span></div>
               <div className="flex gap-2">
-                <button onClick={() => { tg?.HapticFeedback?.selectionChanged(); setIsLiveMode(!isLiveMode); }} className={`p-2 rounded-lg text-[9px] font-bold border transition-all ${isLiveMode ? 'bg-indigo-600 border-indigo-400' : 'bg-white/5 border-white/10'}`}>VOICE {isLiveMode ? 'ON' : 'OFF'}</button>
-                {isLiveMode && <button onMouseDown={startLiveSession} onMouseUp={stopLiveSession} onTouchStart={(e) => { e.preventDefault(); startLiveSession(); }} onTouchEnd={(e) => { e.preventDefault(); stopLiveSession(); }} className={`px-4 py-2 rounded-lg text-[9px] font-bold shadow-lg ${isRecording ? 'bg-red-600' : 'bg-green-600'}`}>{isRecording ? "TALKING..." : "HOLD TO TALK"}</button>}
+                <button onClick={() => { tg?.HapticFeedback?.selectionChanged(); setIsLiveMode(!isLiveMode); if(isLiveMode) stopLiveSession(); }} className={`px-3 py-2 rounded-lg text-[9px] font-bold border transition-all ${isLiveMode ? 'bg-indigo-600 border-indigo-400' : 'bg-white/5 border-white/10'}`}>
+                  VOICE {isLiveMode ? 'ON' : 'OFF'}
+                </button>
+                {isLiveMode && (
+                  <button 
+                    onMouseDown={startLiveSession} 
+                    onMouseUp={stopLiveSession} 
+                    onTouchStart={(e) => { e.preventDefault(); startLiveSession(); }} 
+                    onTouchEnd={(e) => { e.preventDefault(); stopLiveSession(); }} 
+                    className={`px-4 py-2 rounded-lg text-[9px] font-bold shadow-lg transition-colors ${isRecording ? 'bg-red-600' : 'bg-green-600'}`}
+                  >
+                    {isRecording ? "TALKING..." : "HOLD TO TALK"}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -312,13 +383,13 @@ const App: React.FC = () => {
               <div className="text-5xl font-bungee text-indigo-400">{gameState.score}<span className="text-xl text-white/20 ml-1">/{gameState.questions.length}</span></div>
             </div>
             <div className="flex flex-col gap-3">
-              <button onClick={() => { tg?.HapticFeedback?.notificationOccurred('success'); setGameState({ ...gameState, status: 'setup', score: 0, currentQuestionIndex: 0, isShowingFeedback: false }); }} className="w-full py-4 bg-white text-black font-bold rounded-full active:scale-95 transition-all">REPLAY</button>
-              <button onClick={shareResult} className="w-full py-4 bg-indigo-600 text-white font-bold rounded-full active:scale-95 transition-all">SHARE SCORE</button>
+              <button onClick={() => setGameState(prev => ({ ...prev, status: 'setup', score: 0, currentQuestionIndex: 0, isShowingFeedback: false }))} className="w-full py-4 bg-white text-black font-bold rounded-full active:scale-95 transition-all">REPLAY</button>
+              <button onClick={shareResult} className="w-full py-4 bg-indigo-600 text-white font-bold rounded-full active:scale-95 transition-all">CHALLENGE FRIENDS</button>
             </div>
           </div>
         )}
       </main>
-      <footer className="py-6 px-4 text-center text-[8px] text-white/20 uppercase tracking-[0.4em]">Powered by Gemini 3 Flash</footer>
+      <footer className="py-6 px-4 text-center text-[8px] text-white/20 uppercase tracking-[0.4em]">Gemini AI Intelligence</footer>
     </div>
   );
 };
